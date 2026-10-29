@@ -35,7 +35,7 @@ document.querySelector('#app').innerHTML = `
       <button class="nav-item" data-view="notes">${icon('book')} 유전 개념 노트</button>
     </nav>
     <div class="side-lesson"><span class="tiny-label">TODAY’S JOURNEY</span><div class="lesson-title">작은 발견이 자라는 시간 <span>🌱</span></div><div class="side-progress"><span id="side-progress-fill"></span></div><p id="side-progress-text">4단계 중 1단계 탐험 중</p></div>
-    <div class="side-bottom"><div class="mascot small"><i></i><i></i><b>ᴗ</b><span class="sprout">⌁</span></div><p>조금씩 알아가도 괜찮아.<br>우린 모두 탐험 중이니까!</p><span class="side-bottom-line"></span><span class="side-footer">과학을 더 가깝고, 다정하게.</span></div>
+    <div class="side-bottom"><div id="tomato-growth" class="tomato-growth" role="img" aria-label="토마토 성장: 새싹"></div><p>조금씩 알아가도 괜찮아.<br>우린 모두 탐험 중이니까!</p><span class="side-bottom-line"></span><span class="side-footer">과학을 더 가깝고, 다정하게.</span></div>
   </aside>
   <div class="app-content">
     <header class="topbar"><div class="breadcrumb">학습 공간 <span>/</span> <strong id="breadcrumb-title">가계도 실험실</strong></div><div class="top-actions"><span class="saved"><span></span> 자유롭게 실험해 보세요</span><button id="guide-button" class="icon-button" aria-label="학습 가이드 열기">${icon('info')}</button><span class="avatar">G<span>✦</span></span></div></header>
@@ -114,7 +114,19 @@ function stepContent() {
   return `<div class="conclusion-art">✿<span>발견 완료!</span></div><div class="step-copy"><span class="step-eyebrow">04 · 근거를 모아 정리해요</span><h4>유전은 정해진 결과가 아닌, 가능성의 이야기!</h4><p><b>${s.title}</b>에서 ${state.father}인 아버지와 ${state.mother}인 어머니 사이에 태어나는 자녀의 형질 발현 확률은 <b class="highlight">${percentage(p.affected)}</b>예요.</p><p>${s.description} 작은 가족 표본의 결과는 이론적 비율과 다를 수 있으니, 교배 표와 함께 해석해요.</p><div class="completion-badge">${icon('check')} 관찰 · 가설 · 검증 · 결론, 탐구 여정 완료</div></div>`;
 }
 
+function tomatoGrowth() {
+  const stage = state.step;
+  const names = ['작은 새싹', '잎이 무럭무럭', '노란 꽃이 활짝', '토마토가 주렁주렁'];
+  const stemTop = [67, 45, 29, 29][stage];
+  const leaf = (x, y, flip = false) => `<path d="M${x} ${y}q${flip ? '-' : ''}24 -24 ${flip ? '-' : ''}28 -5q${flip ? '' : '-'}4 17 ${flip ? '' : '-'}28 5" fill="#87a86d"/>`;
+  const flower = (x, y) => `<g transform="translate(${x} ${y})"><path d="M0 -10 4 -4 11 -3 6 3 7 10 0 6 -7 10 -6 3 -11 -3 -4 -4Z" fill="#f0cd6a"/><circle r="3" fill="#c89b42"/></g>`;
+  const tomato = (x, y, size) => `<g transform="translate(${x} ${y}) scale(${size})"><path d="M0 -9C-22 -19 -27 7 -14 18Q0 28 14 18C27 7 22 -19 0 -9" fill="#e7816d"/><path d="M0 -9 -10 -14 -5 -7 -11 -4 0 -6 11 -4 5 -7 10 -14Z" fill="#668e55"/><ellipse cx="-12" cy="1" rx="3" ry="6" fill="#f4ab96" transform="rotate(25 -12 1)"/><circle cx="-5" cy="6" r="1.5" fill="#754f41"/><circle cx="5" cy="6" r="1.5" fill="#754f41"/><path d="M-3 11q3 4 6 0" fill="none" stroke="#754f41" stroke-width="1.5" stroke-linecap="round"/></g>`;
+  document.querySelector('#tomato-growth').innerHTML = `<svg viewBox="0 0 130 140" aria-hidden="true"><ellipse cx="65" cy="129" rx="42" ry="5" fill="#e8ecdd"/><path d="M65 102V${stemTop}" fill="none" stroke="#7b9b64" stroke-width="4" stroke-linecap="round"/>${leaf(64, 78)}${leaf(65, 66, true)}${stage > 0 ? leaf(65, 51) + leaf(64, 38, true) : ''}${stage > 1 ? '<path d="M65 43q15 -16 28 -11M65 61Q45 42 30 47" fill="none" stroke="#7b9b64" stroke-width="3"/>' : ''}${stage === 2 ? flower(94, 31) + flower(29, 46) + flower(65, 25) : ''}${stage === 3 ? tomato(94, 43, .77) + tomato(28, 58, .64) + flower(65, 25) : ''}<path d="M42 99h46l-6 27H48Z" fill="#d6b69a"/><path d="M40 97h50v8H40Z" fill="#e5c5a8" rx="2"/><path d="M50 108v13" stroke="#ebcfb7" stroke-width="3" stroke-linecap="round"/></svg><span class="tomato-stage-label">${names[stage]}</span>`;
+  document.querySelector('#tomato-growth').setAttribute('aria-label', `토마토 성장 ${stage + 1}단계: ${names[stage]}`);
+}
+
 function renderSteps() {
+  tomatoGrowth();
   document.querySelector('#steps').innerHTML = steps.map((s, i) => `<button class="step ${state.step === i ? 'current' : ''} ${state.step > i ? 'done' : ''}" data-step="${i}" ${state.step === i ? 'aria-current="step"' : ''}><span>${state.step > i ? icon('check') : String(i + 1).padStart(2, '0')}</span><b>${s}</b>${i < 3 ? icon('chevron', 'step-chevron') : ''}</button>`).join('');
   document.querySelector('#step-content').innerHTML = stepContent();
   document.querySelector('#step-counter').textContent = `STEP 0${state.step + 1} / 04`;
