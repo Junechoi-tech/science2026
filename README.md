@@ -21,6 +21,8 @@ npm run preview
 
 빌드 결과는 `dist/`에 생성됩니다. API 키, 데이터베이스, 외부 API가 필요하지 않습니다. 한국어 글꼴도 앱과 함께 제공됩니다. Vite와 Three.js를 사용합니다.
 
+GitHub Pages가 main 브랜치의 루트를 직접 제공해도 실행되도록, `npm run build`는 루트의 `index.html`, `assets/`, `.nojekyll`도 갱신합니다. 이 생성물도 함께 커밋합니다. HTML 소스는 `app.html`이며 개발 서버의 `/`는 이 파일을 사용합니다. 루트의 생성된 `index.html`을 직접 편집하지 마세요. Actions 배포는 `dist/`를 사용합니다.
+
 ## 해볼 수 있는 것
 
 - 상염색체 열성·우성, X 염색체 연관 열성 유전 상황 선택
