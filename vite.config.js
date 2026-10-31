@@ -13,7 +13,7 @@ export default defineConfig({
   }],
   build: {
     rollupOptions: {
-      input: 'app.html',
+      input: ['app.html', 'genetics-app.html'],
       output: {
         manualChunks: { three: ['three'], 'orbit-controls': ['three/addons/controls/OrbitControls.js'] },
       },
