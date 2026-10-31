@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foods, stages, nutrients, nutrientState, questions } from '../src/digestion.js';
+import { foods, stages, nutrients, nutrientState, questions, stageQuestions } from '../src/digestion.js';
 
 test('food profiles cover mixed meals and representative major nutrients', () => {
   assert.equal(foods.length, 6);
@@ -9,7 +9,7 @@ test('food profiles cover mixed meals and representative major nutrients', () =>
     assert.ok(food.profile.every(n => Number.isInteger(n) && n >= 0 && n <= 3));
     assert.equal(food.profile[Object.keys(nutrients).indexOf(food.main)], 3);
   }
-  assert.equal(foods.find(f => f.id === 'rice').profile[0], 3);
+  assert.equal(foods.find(f => f.id === 'potato').profile[0], 3);
   assert.equal(foods.find(f => f.id === 'egg').profile[0], 0);
   assert.ok(foods.find(f => f.id === 'pork').profile[1] > 0);
 });
@@ -45,4 +45,24 @@ test('learning questions have one valid answer and explanatory feedback', () => 
     assert.ok(q.answer >= 0 && q.answer < q.choices.length);
     assert.ok(q.explanation.length > 30);
   }
+});
+
+test('food replacement adds clear low-fat protein and starch-focused comparisons', () => {
+  assert.deepEqual(foods.find(f => f.id === 'potato').profile, [3, 0, 0]);
+  assert.deepEqual(foods.find(f => f.id === 'shrimp').profile, [0, 3, 0]);
+  assert.ok(!foods.some(f => ['rice', 'chicken'].includes(f.id)));
+  assert.equal(new Set(foods.map(f => f.profile.join(','))).size, 6);
+});
+test('every digestive stop has a prediction, a valid answer and useful feedback', () => {
+  assert.equal(stageQuestions.length, stages.length);
+  for (const q of stageQuestions) {
+    assert.equal(q.choices.length, 3);
+    assert.equal(new Set(q.choices).size, 3);
+    assert.ok(Number.isInteger(q.answer) && q.answer >= 0 && q.answer < 3);
+    assert.ok(q.hint.length > 10);
+    assert.ok(q.explanation.length > 30);
+  }
+  assert.equal(stageQuestions[0].choices[stageQuestions[0].answer], '아밀레이스');
+  assert.equal(stageQuestions[3].choices[stageQuestions[3].answer], '쓸개즙');
+  assert.equal(stageQuestions[4].choices[stageQuestions[4].answer], '모세혈관');
 });
