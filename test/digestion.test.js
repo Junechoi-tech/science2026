@@ -1,16 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foods, stages, nutrients, nutrientState, questions, stageQuestions } from '../src/digestion.js';
+import { foods, stages, nutrients, nutrientState, questions, foodQuestions, isCorrectAnswer, canAdvance, normalizeAnswer } from '../src/digestion.js';
 
 test('food profiles cover mixed meals and representative major nutrients', () => {
-  assert.equal(foods.length, 6);
+  assert.equal(foods.length, 4);
   for (const food of foods) {
     assert.equal(food.profile.length, 3);
     assert.ok(food.profile.every(n => Number.isInteger(n) && n >= 0 && n <= 3));
     assert.equal(food.profile[Object.keys(nutrients).indexOf(food.main)], 3);
   }
   assert.equal(foods.find(f => f.id === 'potato').profile[0], 3);
-  assert.equal(foods.find(f => f.id === 'egg').profile[0], 0);
+  assert.equal(foods.find(f => f.id === 'shrimp').profile[0], 0);
   assert.ok(foods.find(f => f.id === 'pork').profile[1] > 0);
 });
 test('starch partially digests in mouth but protein and fat await their organs', () => {
@@ -50,19 +50,73 @@ test('learning questions have one valid answer and explanatory feedback', () => 
 test('food replacement adds clear low-fat protein and starch-focused comparisons', () => {
   assert.deepEqual(foods.find(f => f.id === 'potato').profile, [3, 0, 0]);
   assert.deepEqual(foods.find(f => f.id === 'shrimp').profile, [0, 3, 0]);
-  assert.ok(!foods.some(f => ['rice', 'chicken'].includes(f.id)));
-  assert.equal(new Set(foods.map(f => f.profile.join(','))).size, 6);
+  assert.ok(!foods.some(f => ['rice', 'chicken', 'bread', 'egg'].includes(f.id)));
+  assert.equal(new Set(foods.map(f => f.profile.join(','))).size, 4);
 });
-test('every digestive stop has a prediction, a valid answer and useful feedback', () => {
-  assert.equal(stageQuestions.length, stages.length);
-  for (const q of stageQuestions) {
-    assert.equal(q.choices.length, 3);
-    assert.equal(new Set(q.choices).size, 3);
-    assert.ok(Number.isInteger(q.answer) && q.answer >= 0 && q.answer < 3);
-    assert.ok(q.hint.length > 10);
-    assert.ok(q.explanation.length > 30);
+test('four requested profiles are preserved, including the fat-only almond teaching model', () => {
+  assert.deepEqual(foods.map(f=>[f.id,f.profile]), [
+    ['potato',[3,0,0]], ['shrimp',[0,3,0]], ['pork',[0,2,3]], ['almond',[0,0,3]],
+  ]);
+  assert.match(foods.find(f=>f.id==='almond').note,/실제 아몬드에는 단백질/);
+});
+test('each food has seven distinct activities with both question types', () => {
+  const texts=[];
+  assert.deepEqual(Object.keys(foodQuestions), foods.map(f=>f.id));
+  for(const food of foods){
+    const qs=foodQuestions[food.id];
+    assert.equal(qs.length,stages.length);
+    assert.ok(qs.filter(q=>q.type==='short').length>=2);
+    assert.ok(qs.some(q=>q.type==='choice'));
+    for(const q of qs){
+      texts.push(q.text);
+      assert.ok(q.hint.length>10);
+      assert.ok(q.explanation.length>30);
+      if(q.type==='choice'){
+        assert.equal(q.choices.length,3);
+        assert.ok(q.answer>=0 && q.answer<3);
+        assert.equal(isCorrectAnswer(q,q.answer),true);
+        assert.equal(isCorrectAnswer(q,(q.answer+1)%3),false);
+      }else{
+        assert.ok(q.accepted.length>0);
+        const answer=Array.isArray(q.accepted[0])?q.accepted.map(group=>group[0]).join('과 '):q.accepted[0];
+        assert.equal(isCorrectAnswer(q,answer),true,q.text);
+        assert.equal(isCorrectAnswer(q,''),false);
+        assert.equal(isCorrectAnswer(q,'아무 답'),false);
+      }
+    }
   }
-  assert.equal(stageQuestions[0].choices[stageQuestions[0].answer], '아밀레이스');
-  assert.equal(stageQuestions[3].choices[stageQuestions[3].answer], '쓸개즙');
-  assert.equal(stageQuestions[4].choices[stageQuestions[4].answer], '모세혈관');
+  assert.equal(new Set(texts).size,28);
+});
+test('short answers tolerate spacing, aliases and two-product order without accepting partial or negated answers',()=>{
+  assert.equal(normalizeAnswer(' 포 도 당. '),'포도당');
+  assert.equal(isCorrectAnswer(foodQuestions.potato[1],'꿈틀운동'),true);
+  assert.equal(isCorrectAnswer(foodQuestions.potato[3],' 포 도 당 '),true);
+  assert.equal(isCorrectAnswer(foodQuestions.potato[3],'포도당이 아님'),false);
+  assert.equal(isCorrectAnswer(foodQuestions.shrimp[3],'아미노 산'),true);
+  assert.equal(isCorrectAnswer(foodQuestions.pork[3],'리파아제'),true);
+  const q=foodQuestions.almond[3];
+  assert.equal(isCorrectAnswer(q,'모노글리세리드, 지방산'),true);
+  assert.equal(isCorrectAnswer(q,'지방산 + 모노글리세리드'),true);
+  assert.equal(isCorrectAnswer(q,'지방산 및 모노글리세라이드'),true);
+  assert.equal(isCorrectAnswer(q,'지방산'),false);
+  assert.equal(isCorrectAnswer(q,'지방산과 글리세롤'),false);
+  assert.equal(isCorrectAnswer(q,'지방산과 모노글리세리드가 아님'),false);
+});
+test('advancement requires correct current and all previous answers for the selected food',()=>{
+  const solved={};
+  assert.equal(canAdvance('potato',0,solved),false);
+  solved['potato:0']=false;
+  assert.equal(canAdvance('potato',0,solved),false);
+  solved['potato:0']=true;
+  assert.equal(canAdvance('potato',0,solved),true);
+  assert.equal(canAdvance('shrimp',0,solved),false);
+  assert.equal(canAdvance('potato',1,solved),false);
+  solved['potato:2']=true;
+  assert.equal(canAdvance('potato',2,solved),false);
+  solved['potato:1']=true;
+  assert.equal(canAdvance('potato',2,solved),true);
+  for(let i=0;i<7;i++)solved[`potato:${i}`]=true;
+  assert.equal(canAdvance('potato',5,solved),true);
+  for(const step of [-1,6,7,1.5])assert.equal(canAdvance('potato',step,solved),false);
+  assert.equal(canAdvance('missing',0,solved),false);
 });
