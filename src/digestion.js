@@ -27,12 +27,6 @@ export function nutrientState(key, step) {
   if (key === 'protein' && step === 2) return { label: '작은 단백질 조각', action: '분해 시작', form: 'medium', description: '펩신이 단백질을 더 작은 조각으로 분해해요.' };
   return { label: nutrients[key].name, action: step === 1 ? '이동 중' : '분해 대기', form: 'large', description: key === 'fat' ? '이 모형에서는 작은창자에서 본격적인 지방 소화를 관찰해요.' : '침의 아밀레이스는 단백질을 분해하지 못해요.' };
 }
-export const questions = [
-  { text: '찐감자를 오래 씹으면 단맛이 나는 까닭은?', choices: ['침의 아밀레이스가 녹말을 엿당으로 분해해서', '위의 펩신이 포도당을 만들어서', '쓸개즙이 녹말을 흩어지게 해서'], answer: 0, explanation: '침의 아밀레이스가 감자 속 녹말의 일부를 단맛이 나는 엿당으로 분해해요.' },
-  { text: '삼겹살 속 지방의 소화를 돕는 쓸개즙에 대한 설명은?', choices: ['쓸개에서 만들고 위에서 작용해요', '간에서 만들고 작은창자에서 지방을 유화해요', '소화효소로 지방을 아미노산으로 분해해요'], answer: 1, explanation: '쓸개즙은 간에서 만들어지고 쓸개에 저장돼요. 효소는 없고, 작은창자에서 지방을 작은 방울로 흩어지게 해요.' },
-  { text: '작은창자에서 단백질이 최종 분해된 물질과 주된 흡수 경로는?', choices: ['엿당 → 암죽관', '지방산 → 모세혈관', '아미노산 → 융털의 모세혈관'], answer: 2, explanation: '단백질은 아미노산으로 분해되어 융털의 모세혈관으로 흡수돼요.' },
-];
-
 // Food-specific activities: choice questions and short answers with explicit aliases.
 const choice = (text, choices, answer, hint, explanation) => ({ type: 'choice', text, choices, answer, hint, explanation });
 const short = (text, accepted, hint, explanation) => ({ type: 'short', text, accepted, hint, explanation });
@@ -87,8 +81,4 @@ export function isCorrectAnswer(question, value) {
     const x=normalizeAnswer(a), y=normalizeAnswer(b);
     return [x+y,y+x,x+'과'+y,x+'와'+y,y+'과'+x,y+'와'+x,x+'및'+y,y+'및'+x].includes(answer);
   }));
-}
-export function canAdvance(foodId, step, predictions) {
-  return Number.isInteger(step) && step>=0 && step<6 && Object.hasOwn(foodQuestions, foodId) &&
-    Array.from({length:step+1},(_,i)=>predictions[`${foodId}:${i}`]===true).every(Boolean);
 }

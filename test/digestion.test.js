@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foods, stages, nutrients, nutrientState, questions, foodQuestions, isCorrectAnswer, canAdvance, normalizeAnswer } from '../src/digestion.js';
+import { foods, stages, nutrients, nutrientState, foodQuestions, isCorrectAnswer, normalizeAnswer } from '../src/digestion.js';
 
 test('food profiles cover mixed meals and representative major nutrients', () => {
   assert.equal(foods.length, 4);
@@ -39,14 +39,6 @@ test('digestive journey includes transit, absorption, water recovery and egestio
   assert.throws(() => nutrientState('sugar', 0), RangeError);
   assert.throws(() => nutrientState('fat', 7), RangeError);
 });
-test('learning questions have one valid answer and explanatory feedback', () => {
-  assert.equal(questions.length, 3);
-  for (const q of questions) {
-    assert.ok(q.answer >= 0 && q.answer < q.choices.length);
-    assert.ok(q.explanation.length > 30);
-  }
-});
-
 test('food replacement adds clear low-fat protein and starch-focused comparisons', () => {
   assert.deepEqual(foods.find(f => f.id === 'potato').profile, [3, 0, 0]);
   assert.deepEqual(foods.find(f => f.id === 'shrimp').profile, [0, 3, 0]);
@@ -101,22 +93,4 @@ test('short answers tolerate spacing, aliases and two-product order without acce
   assert.equal(isCorrectAnswer(q,'지방산'),false);
   assert.equal(isCorrectAnswer(q,'지방산과 글리세롤'),false);
   assert.equal(isCorrectAnswer(q,'지방산과 모노글리세리드가 아님'),false);
-});
-test('advancement requires correct current and all previous answers for the selected food',()=>{
-  const solved={};
-  assert.equal(canAdvance('potato',0,solved),false);
-  solved['potato:0']=false;
-  assert.equal(canAdvance('potato',0,solved),false);
-  solved['potato:0']=true;
-  assert.equal(canAdvance('potato',0,solved),true);
-  assert.equal(canAdvance('shrimp',0,solved),false);
-  assert.equal(canAdvance('potato',1,solved),false);
-  solved['potato:2']=true;
-  assert.equal(canAdvance('potato',2,solved),false);
-  solved['potato:1']=true;
-  assert.equal(canAdvance('potato',2,solved),true);
-  for(let i=0;i<7;i++)solved[`potato:${i}`]=true;
-  assert.equal(canAdvance('potato',5,solved),true);
-  for(const step of [-1,6,7,1.5])assert.equal(canAdvance('potato',step,solved),false);
-  assert.equal(canAdvance('missing',0,solved),false);
 });

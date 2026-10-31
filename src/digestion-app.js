@@ -1,6 +1,8 @@
 import '@fontsource-variable/noto-sans-kr';
 import './digestion.css';
-import { foods, nutrients, stages, nutrientState, questions, foodQuestions, isCorrectAnswer, canAdvance } from './digestion.js';
+import { hasResponse, foodProgress, totalProgress, canMoveForward, makeSubmission, escapeHtml } from './assessment.js';
+import { createReportPdf, downloadReport } from './report-pdf.js';
+import { foods, nutrients, stages, nutrientState, foodQuestions } from './digestion.js';
 
 const symbols = {
   explore: '<path d="M8 3v6l-5 9a2 2 0 0 0 2 3h14a2 2 0 0 0 2-3l-5-9V3M6 3h12M7 14h10"/>',
@@ -14,7 +16,32 @@ const symbols = {
   check: '<path d="m5 12 4 4L19 6"/>', sound: '<path d="M4 10h4l5-5v14l-5-5H4zm12-3a8 8 0 0 1 0 10m3-13a12 12 0 0 1 0 16"/>',
 };
 const icon = (key) => `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${symbols[key] || symbols.bulb}</svg>`;
-const state = { food: foods[0], step: 0, playing: false, speed: 1, filter: 'all', view: 'explore', quiz: 0, answers: {}, predictions: {}, attempts: {}, hint: false, drafts: {}, progress: 0 };
+const state = { food: foods[0], step: 0, playing: false, speed: 1, filter: 'all', view: 'explore', responses: {}, foodSteps: {}, progress: 0, student: { school:'', classroom:'', number:'', name:'' }, submitted: null, busy: false, error: '' };
+const storageKey='digestion-assessment-v4';
+try {
+  const saved=JSON.parse(sessionStorage.getItem(storageKey) || 'null');
+  if(saved){
+    for(const food of foods)foodQuestions[food.id].forEach((q,i)=>{
+      const key=`${food.id}:${i}`;
+      if(hasResponse(q,saved.responses?.[key]))state.responses[key]=saved.responses[key];
+    });
+    for(const key of Object.keys(state.student))state.student[key]=String(saved.student?.[key] || '').slice(0,40);
+    for(const food of foods){
+      let step=Number(saved.foodSteps?.[food.id]) || 0;
+      step=Math.max(0,Math.min(6,Math.floor(step)));
+      while(step>0 && !Array.from({length:step},(_,i)=>hasResponse(foodQuestions[food.id][i],state.responses[`${food.id}:${i}`])).every(Boolean))step--;
+      state.foodSteps[food.id]=step;
+    }
+    state.food=foods.find(f=>f.id===saved.foodId) || foods[0];
+    state.step=state.foodSteps[state.food.id] || 0;
+    if(saved.submitted && totalProgress(state.responses)===28)state.submitted=makeSubmission(state.responses,state.student,saved.at);
+  }
+} catch { /* An unavailable or old draft does not block the assessment. */ }
+function persist(){
+  state.foodSteps[state.food.id]=state.step;
+  try{sessionStorage.setItem(storageKey,JSON.stringify({responses:state.responses,student:state.student,foodSteps:state.foodSteps,foodId:state.food.id,submitted:!!state.submitted,at:state.submitted?.at}));}catch{/* Browser storage may be disabled. */}
+}
+
 let frame;
 let lastTime;
 // Connected paths follow the lumen, including the intestinal bends.
@@ -31,26 +58,27 @@ const app = document.querySelector('#app');
 app.innerHTML = `
 <header class="topbar">
   <a class="brand" href="./"><span class="brand-icon">${icon('explore')}</span><span>한입의 여행<small>DIGESTION LAB</small></span></a>
-  <nav aria-label="학습 메뉴"><button class="nav-button active" data-view="explore">${icon('explore')} 소화 탐험실</button><button class="nav-button" data-view="notes">${icon('book')} 개념 노트</button><button class="nav-button" data-view="quiz">${icon('quiz')} 배움 확인</button></nav>
+  <nav aria-label="학습 메뉴"><button class="nav-button active" data-view="explore">${icon('explore')} 소화 평가</button><button class="nav-button" data-view="notes" disabled title="PDF 제출 후 개념 노트가 열려요">${icon('book')} 개념 노트</button><button class="nav-button" data-view="results">${icon('quiz')} 제출·결과</button></nav>
   <button class="guide-button" id="guide">사용 안내 <span>?</span></button>
 </header>
 <main>
   <div class="breadcrumb">중학교 2학년 과학 <span>›</span> 동물과 에너지 <span>›</span> 소화와 흡수</div>
   <section class="page-heading"><div><div class="eyebrow"><span></span> EVERY BITE HAS A STORY</div><h1>내가 먹은 음식은 <em>어디로 갈까?</em></h1><p>한입의 음식이 작은 영양소가 되어, 우리 몸에 흡수되기까지.</p></div><div class="lesson-tag"><span>🍽️</span><div>오늘의 탐구<small>음식 속 영양소의 소화와 흡수</small></div></div></section>
+  <section class="assessment-bar panel" aria-label="평가 진행 및 제출"><div class="assessment-overview"><div><span class="eyebrow">MY ASSESSMENT</span><h2>네 음식의 28문항을 모두 풀어 보세요</h2><p id="assessment-progress"></p></div><div class="assessment-actions"><button id="submit-pdf" class="primary" type="button" disabled>PDF로 제출하기</button><button id="new-assessment" class="text-button" type="button">새 평가 시작</button></div></div><form id="student-form" class="student-form"><label>학교 (선택)<input data-student="school" maxlength="40" autocomplete="off"></label><label>학년·반<input data-student="classroom" maxlength="20" placeholder="예: 2학년 3반" required autocomplete="off"></label><label>번호<input data-student="number" maxlength="10" inputmode="numeric" required autocomplete="off"></label><label>이름<input data-student="name" maxlength="20" required autocomplete="off"></label></form><p id="submission-note">28문항 완료 후 PDF를 기기에 저장합니다. 선생님이 안내한 곳에 파일을 직접 제출하세요. 제출 전에는 채점 결과가 표시되지 않습니다.</p></section>
   <div id="explore-view">
     <div class="workspace">
       <section class="food-panel panel"><div class="panel-title"><span class="number">01</span><h2>음식을 골라요</h2><span class="tiny">SELECT</span></div><p class="panel-subtitle">오늘은 무엇을 먹어 볼까요?</p><div class="food-grid" id="food-grid"></div><div id="food-profile"></div><div class="model-note">막대는 학습용 상대 함량이에요.<br>실제 영양 성분의 비율·양과는 달라요.</div></section>
-      <section class="body-panel panel"><div class="panel-title"><span class="number">02</span><h2>소화의 길을 따라가요</h2><span class="live-label"><i></i> SIMULATION</span></div><div class="body-toolbar"><span>소화계 모형</span><button id="labels" aria-pressed="true">기관 이름 <span class="toggle on"></span></button></div><div id="body-map"></div><div class="map-legend"><span><i class="legend-food"></i>음식물의 이동</span><span><i class="legend-juice"></i>소화액의 이동</span><span>문제를 풀며 차례로 이동해요</span></div><div class="transport"><button class="reset-button" id="reset" aria-label="처음으로 초기화">${icon('reset')}</button><button id="play" class="play-button">${icon('play')} 여행 시작</button><button id="next" class="next-button" aria-label="다음 단계">${icon('chevron')}</button><span class="transport-divider"></span><label class="speed-label" for="speed">속도</label><select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select><span id="stage-count"></span></div><p class="movement-status" id="movement-status" role="status"></p></section>
+      <section class="body-panel panel"><div class="panel-title"><span class="number">02</span><h2>소화의 길을 따라가요</h2><span class="live-label"><i></i> SIMULATION</span></div><div class="body-toolbar"><span>소화계 모형</span><button id="labels" aria-pressed="true">기관 이름 <span class="toggle on"></span></button></div><div id="body-map"></div><div class="map-legend"><span><i class="legend-food"></i>음식물의 이동</span><span><i class="legend-juice"></i>소화액의 이동</span><span>문제를 풀며 차례로 이동해요</span></div><div class="transport"><button class="reset-button" id="previous" aria-label="이전 문항으로" title="이전 문항으로">${icon('chevron')}<span>이전</span></button><button id="play" class="play-button">${icon('play')} 여행 시작</button><button id="next" class="next-button" aria-label="다음 단계">${icon('chevron')}</button><span class="transport-divider"></span><label class="speed-label" for="speed">속도</label><select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select><span id="stage-count"></span></div><p class="movement-status" id="movement-status" role="status"></p></section>
       <aside class="detail-panel"><div class="panel observation"><div class="panel-title"><span class="number">03</span><h2>무슨 일이 일어날까요?</h2></div><div id="observation" aria-live="polite"></div></div><div id="thinking" class="thinking"></div></aside>
     </div>
     <section class="nutrient-section"><div class="section-heading"><div><h2>영양소의 변화를 한눈에 <span>MOLECULE TRACKER</span></h2><p>음식 안에 함께 들어 있는 영양소를 각각 따라가 보세요.</p></div><div class="filter-tabs" role="group" aria-label="관찰할 영양소"><button data-filter="all" class="active">전체</button><button data-filter="starch">녹말</button><button data-filter="protein">단백질</button><button data-filter="fat">지방</button></div></div><div class="nutrient-cards" id="nutrient-cards"></div></section>
     <div class="learning-footer">${icon('bulb')} <span>기억해요! <strong>소화</strong>는 영양소를 작게 분해하는 것, <strong>흡수</strong>는 영양소가 몸속으로 들어가는 것이에요.</span></div>
   </div>
   <section id="notes-view" class="secondary-view" hidden></section>
-  <section id="quiz-view" class="secondary-view" hidden></section>
+  <section id="results-view" class="secondary-view" hidden></section>
   <footer class="footer"><span>한입의 여행 <b>·</b> 음식으로 만나는 우리 몸의 과학</span><span>중2 과학 · 교육용 단순화 모형 <a href="${import.meta.env.DEV ? './genetics-app.html' : './genetics.html'}">유전의 숲 ↗</a></span></footer>
 </main>
-<dialog id="guide-dialog"><button class="dialog-close" aria-label="안내 닫기">${icon('close')}</button><div class="eyebrow">WELCOME TO DIGESTION LAB</div><h2>한입으로 시작하는 과학 탐험</h2><ol><li><strong>음식 고르기</strong> — 주로 들어 있는 영양소를 확인해요.</li><li><strong>문제 풀기</strong> — 음식마다 다른 객관식·주관식 문제에 답해요.</li><li><strong>다음 기관으로</strong> — 정답을 확인한 뒤 이동 버튼을 눌러요. 건너뛰기는 할 수 없어요.</li><li><strong>배움 확인</strong> — 세 가지 질문으로 배운 내용을 확인해요.</li></ol><p>1×에서는 약 1.8초에 걸쳐 다음 기관으로 연속 이동해요. 모든 기관에서 문제를 맞혀야 다음 기관으로 이동할 수 있어요. 주관식은 핵심 용어만 써 주세요. 띄어쓰기와 대표적인 동의어는 허용해요. 실제 소화 시간·기관 크기·분자 수를 재현한 모형은 아니에요. 음식 변경 시 처음 단계로 돌아가요.</p><p class="source-note">내용 참고: 첨부된 비상교육 중학교 과학 2, 194–199쪽. 그림과 문장은 이 시뮬레이션을 위해 새로 구성했어요. 음식의 비타민·무기염류·물과 식이섬유의 자세한 경로는 생략했어요.</p><button class="primary dialog-start">탐험하러 가기 ${icon('arrow')}</button></dialog>`;
+<dialog id="guide-dialog"><button class="dialog-close" aria-label="안내 닫기">${icon('close')}</button><div class="eyebrow">WELCOME TO DIGESTION LAB</div><h2>한입으로 시작하는 과학 탐험</h2><ol><li><strong>음식 고르기</strong> — 주로 들어 있는 영양소를 확인해요.</li><li><strong>문제 풀기</strong> — 음식마다 다른 객관식·주관식 문제에 답해요.</li><li><strong>답안 수정</strong> — 응답하면 다음 기관으로 이동할 수 있어요. 이전 문항 버튼으로 돌아와 제출 전까지 수정해요.</li><li><strong>PDF로 제출하기</strong> — 네 음식의 28문항을 모두 응답하고 학생 정보를 입력한 뒤 PDF를 저장해요. 이후 채점 결과가 열려요.</li></ol><p>1×에서는 약 1.8초에 걸쳐 다음 기관으로 연속 이동해요. 정답 여부와 관계없이 답을 입력하면 다음 기관으로 이동할 수 있어요. 채점 결과와 해설은 PDF 생성 후 공개되며, 생성 시점의 답안은 수정할 수 없어요. 주관식은 핵심 용어만 써 주세요. 띄어쓰기와 대표적인 동의어는 허용해요. 실제 소화 시간·기관 크기·분자 수를 재현한 모형은 아니에요. 이 탭에서 응답을 임시 저장하며 음식 변경 시 마지막으로 보던 문항으로 돌아가요. 새 평가 시작은 현재 답안을 지워요.</p><p class="source-note">내용 참고: 첨부된 비상교육 중학교 과학 2, 194–199쪽. 그림과 문장은 이 시뮬레이션을 위해 새로 구성했어요. 음식의 비타민·무기염류·물과 식이섬유의 자세한 경로는 생략했어요.</p><button class="primary dialog-start">탐험하러 가기 ${icon('arrow')}</button></dialog>`;
 
 function bodyMap() {
   const active = state.step;
@@ -85,27 +113,23 @@ function molecules(key, form) {
   return `<svg viewBox="0 0 220 69" class="molecules ${small?'separated':''}" role="img" aria-label="${small?'분해된 작은 분자':form==='medium'?'일부가 분해된 분자 모형':'연결된 큰 분자 모형'}">${links}${points.map(([x,y],i)=>key==='protein'?`<rect x="${x-6}" y="${y-6}" width="12" height="12" rx="3" fill="${color}" opacity="${.7+(i%3)*.1}"/>`:key==='fat'?`<path d="m${x} ${y-8} 8 14h-16Z" fill="${color}"/>`:`<circle cx="${x}" cy="${y}" r="6" fill="${color}" opacity="${.7+(i%3)*.1}"/>`).join('')}</svg>`;
 }
 function update() {
-  document.querySelector('#food-grid').innerHTML=foods.map(f=>`<button class="food-card ${state.food.id===f.id?'selected':''}" data-food="${f.id}" aria-pressed="${state.food.id===f.id}"><span class="food-emoji">${f.emoji}</span><strong>${f.name}</strong><small>${f.subtitle}</small>${state.food.id===f.id?`<span class="selected-check">${icon('check')}</span>`:''}</button>`).join('');
+  refreshAssessmentControls();
   document.querySelector('#food-profile').innerHTML=`<div class="profile-heading"><strong>${state.food.name} 속 영양소</strong><span>상대 함량</span></div>${Object.entries(nutrients).map(([key,n],i)=>`<div class="profile-row"><span><i style="background:${n.color}"></i>${n.name}</span><div class="profile-bar"><b style="width:${state.food.profile[i]/3*100}%;background:${n.color}"></b></div><small>${['미포함','적음','보통','많음'][state.food.profile[i]]}</small></div>`).join('')}`;
   if (!document.querySelector('.anatomy')) document.querySelector('#body-map').innerHTML=bodyMap();
   updateMap();
   document.querySelector('#body-map').classList.toggle('hide-labels',document.querySelector('#labels').getAttribute('aria-pressed')==='false');
   document.querySelector('#stage-count').textContent=`0${state.step+1} / 07`;
-  const unlocked=canAdvance(state.food.id,state.step,state.predictions);
-  document.querySelector('#play').innerHTML=icon(state.playing?'pause':'play')+(state.playing?'잠시 멈춤':state.step===6?'다시 풀기':'다음 기관으로');
-  document.querySelector('#play').disabled=!state.playing && !unlocked && !(state.step===6 && state.predictions[predictionKey()]===true);
-  document.querySelector('#next').disabled=state.playing || !unlocked;
-  document.querySelector('#movement-status').textContent=state.playing?'소화관을 따라 이동하고 있어요.':state.predictions[predictionKey()]!==true?'현재 단계의 정답을 확인하면 이동할 수 있어요.':state.step===6?'7단계 탐구를 모두 마쳤어요!':'정답 확인 완료! 다음 기관으로 이동해 보세요.';
   renderObservation();
-  document.querySelector('#thinking').innerHTML=`<div>${icon('bulb')} <strong>한 걸음 더 생각하기</strong></div><p>${state.predictions[predictionKey()]!==undefined?stages[state.step].tip:'이 기관에서 음식물은 이동할까요, 분해될까요, 흡수될까요? 영양소와 기관의 역할을 연결해 예측해 보세요.'}</p>`;
+  document.querySelector('#thinking').innerHTML=`<div>${icon('bulb')} <strong>한 걸음 더 생각하기</strong></div><p>${state.submitted?stages[state.step].tip:'이 기관에서 음식물은 이동할까요, 분해될까요, 흡수될까요? 영양소와 기관의 역할을 연결해 예측해 보세요.'}</p>`;
   document.querySelector('#nutrient-cards').innerHTML=Object.entries(nutrients).filter(([key])=>state.filter==='all'||state.filter===key).map(([key,n])=>{
     const index=Object.keys(nutrients).indexOf(key), present=state.food.profile[index]>0;
     const status=nutrientState(key,state.step);
-    const observed=state.predictions[predictionKey()]!==undefined;
-    const finalKnown=state.predictions[`${state.food.id}:3`]!==undefined || state.predictions[`${state.food.id}:4`]!==undefined;
-    return `<article class="nutrient-card ${present?'':'absent'}" style="--nutrient:${n.color}"><div class="nutrient-card-top"><h3><i></i>${n.name}</h3><span>${present?(observed?status.action:'예측 후 관찰'):'이 모형에는 없음'}</span></div>${present?(observed?molecules(key,status.form):'<div class="absent-graphic">? 먼저 예측 문제를 풀어 보세요</div>'):'<div class="absent-graphic">이 모형에는 표시하지 않아요</div>'}<div class="molecule-description"><strong>${present?(observed?status.label:'어떤 변화가 생길까요?'):'—'}</strong><span>${present?(observed?status.description:'정답을 찾으면 분자 모형과 설명이 열려요.'):`${state.food.name}의 다른 영양소를 관찰해 보세요.`}</span></div><div class="nutrient-destination">최종 소화 산물 ${icon('arrow')} <b>${finalKnown?n.final:'?'}</b></div></article>`;
+    const observed=!!state.submitted;
+    const finalKnown=!!state.submitted;
+    return `<article class="nutrient-card ${present?'':'absent'}" style="--nutrient:${n.color}"><div class="nutrient-card-top"><h3><i></i>${n.name}</h3><span>${present?(observed?status.action:'제출 후 공개'):'이 모형에는 없음'}</span></div>${present?(observed?molecules(key,status.form):'<div class="absent-graphic">PDF 제출 후 분자 모형이 열려요</div>'):'<div class="absent-graphic">이 모형에는 표시하지 않아요</div>'}<div class="molecule-description"><strong>${present?(observed?status.label:'어떤 변화가 생길까요?'):'—'}</strong><span>${present?(observed?status.description:'PDF 제출 후 분자 모형과 설명이 열려요.'):`${state.food.name}의 다른 영양소를 관찰해 보세요.`}</span></div><div class="nutrient-destination">최종 소화 산물 ${icon('arrow')} <b>${finalKnown?n.final:'?'}</b></div></article>`;
   }).join('');
   document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('active',b.dataset.filter===state.filter));
+  persist();
 }
 function placeMarker() {
   const marker = document.querySelector('.food-marker');
@@ -127,29 +151,62 @@ function updateMap() {
   placeMarker();
 }
 function predictionKey(){ return `${state.food.id}:${state.step}`; }
+function refreshAssessmentControls(){
+  const count=totalProgress(state.responses);
+  document.querySelector('#food-grid').innerHTML=foods.map(f=>{
+    const n=foodProgress(f.id,state.responses);
+    return `<button class="food-card ${state.food.id===f.id?'selected':''} ${n===7?'food-complete':''}" data-food="${f.id}" aria-pressed="${state.food.id===f.id}" ${state.busy?'disabled':''}><span class="food-emoji">${f.emoji}</span><strong>${f.name} ${n===7?'<span class="completion-badge">완료</span>':''}</strong><small>${n} / 7 응답</small>${state.food.id===f.id?`<span class="selected-check">${icon('check')}</span>`:''}</button>`;
+  }).join('');
+  const unlocked=canMoveForward(state.food.id,state.step,state.responses);
+  document.querySelector('#play').innerHTML=icon(state.playing?'pause':'play')+(state.playing?'잠시 멈춤':state.step===6?'마지막 문항':'다음 기관으로');
+  document.querySelector('#play').disabled=state.busy || (!state.playing && !unlocked);
+  document.querySelector('#next').disabled=state.busy || state.playing || !unlocked;
+  document.querySelector('#previous').disabled=state.busy || state.step===0;
+  document.querySelector('#movement-status').textContent=state.playing?'소화관을 따라 이동하고 있어요.':state.step===6?'다른 음식을 선택하거나 이전 문항으로 돌아가 답안을 확인하세요.':unlocked?'응답이 저장되었습니다. 다음 기관으로 이동할 수 있어요.':'답을 선택하거나 입력하면 다음 기관으로 이동할 수 있어요.';
+  document.querySelector('#assessment-progress').textContent=`${count} / 28문항 응답 · ${foods.filter(f=>foodProgress(f.id,state.responses)===7).length} / 4음식 완료`;
+  document.querySelector('#submit-pdf').disabled=state.busy || count!==28;
+  document.querySelector('#submit-pdf').textContent=state.busy?'PDF 만드는 중…':state.submitted?'PDF 다시 받기':'PDF로 제출하기';
+  document.querySelector('#new-assessment').disabled=state.busy;
+  const localProgress=document.querySelector('.prediction-heading small');
+  if(localProgress)localProgress.textContent=`${foodProgress(state.food.id,state.responses)} / 7 응답`;
+  const lastMessage=document.querySelector('.journey-done');
+  if(lastMessage && !state.submitted)lastMessage.textContent=foodProgress(state.food.id,state.responses)===7?'이 음식의 7문항을 완료했어요. 다른 음식도 모두 풀어 주세요.':'이 문항에 응답하면 이 음식의 평가가 완료돼요.';
+  document.querySelectorAll('[data-student]').forEach(input=>{input.disabled=state.busy || !!state.submitted;});
+  document.querySelector('[data-view="notes"]').disabled=!state.submitted;
+  document.querySelector('#submission-note').textContent=state.error || (state.submitted?'PDF 저장을 시작했습니다. 선생님이 안내한 곳에 파일을 직접 제출하세요. 제출 시점의 답안과 채점 결과를 아래에서 확인할 수 있어요.':'28문항 완료 후 PDF를 기기에 저장합니다. 선생님이 안내한 곳에 파일을 직접 제출하세요. 제출 전에는 채점 결과·해설·개념 노트가 표시되지 않습니다.');
+}
 function renderObservation() {
-  const q=foodQuestions[state.food.id][state.step], key=predictionKey();
-  const resolved=state.predictions[key]===true, attempt=state.attempts[key];
-  const activity=q.type==='choice' ? `<div class="prediction-options">${q.choices.map((c,i)=>`<button data-predict="${i}" ${resolved || state.playing?'disabled':''} class="${resolved&&i===q.answer?'correct':!resolved&&attempt===i?'incorrect':''}"><span>${i+1}</span>${c}${resolved&&i===q.answer?icon('check'):''}</button>`).join('')}</div>` : `<form id="short-answer-form" class="short-answer-form"><label for="short-answer">나의 답 <span>주관식 · 핵심 용어로 답해요</span></label><div class="short-answer-row"><input id="short-answer" name="answer" type="text" maxlength="80" autocomplete="off" autocapitalize="off" spellcheck="false" required aria-describedby="short-help" ${resolved || state.playing?'disabled':''}><button type="submit" class="primary" ${resolved || state.playing?'disabled':''}>정답 확인</button></div><p id="short-help">띄어쓰기는 자유롭게 써도 돼요. 물질이 두 가지라면 둘 다 써 주세요.</p></form>`;
-  document.querySelector('#observation').innerHTML=`<div class="stage-pill">STEP 0${state.step+1} <span>·</span> ${stages[state.step].name}</div><div class="prediction-heading"><span>${state.food.emoji} ${state.food.name} 탐구</span><small>${Object.keys(state.predictions).filter(k=>k.startsWith(state.food.id+':')).length} / 7 완료</small></div><h3 class="prediction-question">${q.text}</h3>${activity}${resolved?`<div class="prediction-feedback" role="status"><strong>이유까지 연결했어요!</strong><p>${q.explanation}</p></div><details class="stage-explanation"><summary>기관의 역할 더 알아보기</summary><p>${stages[state.step].detail}</p><div class="enzyme-box"><span>이 단계의 핵심</span><strong>${stages[state.step].enzyme}</strong></div></details>${state.step<6?`<button class="primary continue-button" id="continue" ${state.playing?'disabled':''}>${state.playing?'이동 중…':'다음 기관으로'} ${icon('arrow')}</button>`:'<div class="journey-done">한입의 여행 완료! 다른 음식과 비교해 보세요.</div>'}`:`${attempt!==undefined?'<p class="try-again" role="status">아직 정답이 아니에요. 힌트를 보고 다시 답해 보세요. 주관식은 핵심 용어만 써 주세요.</p>':''}<button class="hint-button" id="hint">${icon('bulb')} ${state.hint?'힌트 접기':'힌트 보기'}</button>${state.hint?`<p class="prediction-hint">${q.hint}</p>`:''}<p class="prediction-prompt">정답을 찾으면 해설과 다음 이동이 열려요.<br>틀려도 괜찮아요. 이유를 생각하며 다시 도전해요.</p>`}<div class="food-observation"><span>${state.food.emoji}</span><p><b>${state.food.name} 관찰 포인트</b>${state.food.note}</p></div>`;
-  const field=document.querySelector('#short-answer');
-  if(field)field.value=state.drafts[key] || '';
+  const q=foodQuestions[state.food.id][state.step], key=predictionKey(), response=state.responses[key];
+  const answered=hasResponse(q,response), locked=!!state.submitted || state.busy || state.playing;
+  const row=state.submitted?.rows.find(r=>r.foodId===state.food.id && r.stage===stages[state.step].name);
+  const activity=q.type==='choice' ? `<div class="prediction-options">${q.choices.map((c,i)=>`<button data-predict="${i}" aria-pressed="${response===i}" ${locked?'disabled':''} class="${row&&i===q.answer?'correct':row&&response===i&&!row.correct?'incorrect':response===i?'selected-answer':''}"><span>${i+1}</span>${c}${response===i?'<span class="answer-marker">선택</span>':''}</button>`).join('')}</div>` : `<form id="short-answer-form" class="short-answer-form"><label for="short-answer">나의 답 <span>주관식 · 핵심 용어로 답해요</span></label><div class="short-answer-row"><input id="short-answer" name="answer" type="text" maxlength="80" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="short-help" ${locked?'disabled':''}></div><p id="short-help">입력한 답은 자동 저장됩니다. 두 물질을 묻는 문항은 둘 다 써 주세요.</p></form>`;
+  document.querySelector('#observation').innerHTML=`<div class="stage-pill">STEP 0${state.step+1} <span>·</span> ${stages[state.step].name}</div><div class="prediction-heading"><span>${state.food.emoji} ${state.food.name} 평가</span><small>${foodProgress(state.food.id,state.responses)} / 7 응답</small></div><h3 class="prediction-question">${q.text}</h3>${activity}<p class="answer-save-status" id="answer-status" role="status">${state.submitted?'제출한 답안입니다.':answered?'응답이 저장되었습니다. 제출 전까지 수정할 수 있어요.':'아직 응답하지 않았어요.'}</p>${row?`<div class="prediction-feedback ${row.correct?'':'wrong'}"><strong>${row.correct?'정답입니다.':'오답입니다.'}</strong><p>정답: ${escapeHtml(row.expected)}</p><p>${q.explanation}</p></div><details class="stage-explanation"><summary>기관의 역할 더 알아보기</summary><p>${stages[state.step].detail}</p></details>`:''}${state.step<6?`<button class="primary continue-button" id="continue" ${!answered || state.playing || state.busy?'disabled':''}>${state.playing?'이동 중…':'다음 기관으로'} ${icon('arrow')}</button>`:`<div class="journey-done">${foodProgress(state.food.id,state.responses)===7?'이 음식의 7문항을 완료했어요. 다른 음식도 모두 풀어 주세요.':'이 문항에 응답하면 이 음식의 평가가 완료돼요.'}</div>`}`;
+  const field=document.querySelector('#short-answer');if(field)field.value=typeof response==='string'?response:'';
 }
-function checkPrediction(value) {
-  if(state.playing || state.predictions[predictionKey()]===true)return;
+function recordAnswer(value){
+  if(state.playing || state.submitted || state.busy)return;
   const q=foodQuestions[state.food.id][state.step];
-  state.attempts[predictionKey()]=value;
-  if(isCorrectAnswer(q,value))state.predictions[predictionKey()]=true;
-  else state.hint=true;
+  if(hasResponse(q,value))state.responses[predictionKey()]=value;
+  else delete state.responses[predictionKey()];
   update();
-  if(q.type==='short' && state.predictions[predictionKey()]!==true)document.querySelector('#short-answer').focus();
 }
-function resetCurrentFood(){
-  stop();state.step=0;state.progress=0;state.hint=false;
-  for(const record of [state.predictions,state.attempts,state.drafts]){
-    for(const key of Object.keys(record))if(key.startsWith(state.food.id+':'))delete record[key];
-  }
-  update();
+async function submitPdf(){
+  if(state.busy || totalProgress(state.responses)!==28)return;
+  if(!document.querySelector('#student-form').reportValidity())return;
+  stop();state.busy=true;state.error='';update();
+  try{
+    const snapshot=state.submitted || makeSubmission(state.responses,state.student);
+    const blob=await createReportPdf(snapshot);
+    downloadReport(blob,snapshot);
+    state.submitted=snapshot;state.busy=false;
+    setView('results');persist();
+  }catch(error){state.busy=false;state.error=`PDF를 만들지 못했습니다. 답안은 유지됩니다. 다시 시도해 주세요. (${error.message})`;update();}
+}
+function previousQuestion(){if(state.busy || state.step===0)return;stop();state.step--;state.progress=0;update();}
+function newAssessment(){
+  if(!window.confirm('현재 탭의 모든 답안과 학생 정보를 지우고 새 평가를 시작할까요? PDF는 먼저 저장해 주세요.'))return;
+  stop();state.responses={};state.foodSteps={};state.submitted=null;state.error='';state.student={school:'',classroom:'',number:'',name:''};state.food=foods[0];state.step=0;state.progress=0;
+  document.querySelectorAll('[data-student]').forEach(input=>{input.value='';});setView('explore');
 }
 function stop(){state.playing=false;cancelAnimationFrame(frame);lastTime=undefined;}
 function animate(now){
@@ -159,46 +216,49 @@ function animate(now){
   state.progress=Math.min(1,state.progress+elapsed*state.speed/1800);
   placeMarker();
   if(state.progress>=1){
-    state.step++; state.progress=0; state.hint=false;
+    state.step++; state.progress=0;
     stop();
     update();
   }
   if(state.playing)frame=requestAnimationFrame(animate);
 }
 function start(){
-  if(state.playing || !canAdvance(state.food.id,state.step,state.predictions))return;
+  if(state.playing || !canMoveForward(state.food.id,state.step,state.responses))return;
   state.playing=true;lastTime=undefined;frame=requestAnimationFrame(animate);update();
 }
-function setView(view){stop();state.view=view;['explore','notes','quiz'].forEach(v=>{document.querySelector(`#${v}-view`).hidden=v!==view;});document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));if(view==='notes')renderNotes();if(view==='quiz')renderQuiz();update();}
+function setView(view){if(view==='notes'&&!state.submitted)return;stop();state.view=view;['explore','notes','results'].forEach(v=>{document.querySelector(`#${v}-view`).hidden=v!==view;});document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));if(view==='notes')renderNotes();if(view==='results')renderResults();update();}
 function renderNotes(){document.querySelector('#notes-view').innerHTML=`<div class="notes-intro"><span class="eyebrow">CONNECT THE DOTS</span><h2>한입에 담긴 과학, 차근차근.</h2><p>소화 기관의 역할과 영양소의 경로를 연결해 보세요.</p></div><div class="notes-grid">${Object.entries(nutrients).map(([key,n])=>`<article class="panel note-card" style="--nutrient:${n.color}"><h3><i style="background:${n.color}"></i>${n.name}의 여행</h3><div class="note-flow">${key==='starch'?'녹말 → 엿당 → 포도당':key==='protein'?'단백질 → 작은 조각 → 아미노산':'지방 → 작은 지방 방울 → 지방산 + 모노글리세리드'}</div><p>${key==='starch'?'입에서 침 아밀레이스가 작용해요. 작은창자에서 이자액의 아밀레이스와 엿당 분해 효소 등의 작용으로 포도당이 돼요.':key==='protein'?'위의 펩신이 분해를 시작해요. 작은창자에서 트립신과 여러 효소가 작용하여 아미노산이 돼요.':'작은창자에서 쓸개즙이 유화한 후, 라이페이스가 지방을 분해해요. 쓸개즙의 유화는 효소에 의한 화학적 분해가 아니에요.'}</p><strong class="note-route">${n.route}</strong></article>`).join('')}</div><article class="panel notes-table"><h3>기관별 역할 한눈에 보기</h3><div class="table-scroll"><table><thead><tr><th>기관</th><th>무엇을 할까요?</th><th>주요 작용</th></tr></thead><tbody>${stages.map(s=>`<tr><th>${s.name}</th><td>${s.verb}</td><td>${s.enzyme}</td></tr>`).join('')}</tbody></table></div></article><div class="learning-footer">${icon('bulb')} 간·쓸개·이자는 소화액을 공급해요. 음식물이 직접 지나가는 소화관은 아니에요.</div><p class="reference">참고: 비상교육 중학교 과학 2, 194–199쪽. 이 모형은 주요 영양소의 경로를 단순화했으며 실제 소화 시간·분자 수·영양 성분을 정량적으로 나타내지 않아요.</p>`;}
-function renderQuiz(){const q=questions[state.quiz], answer=state.answers[state.quiz], done=Object.keys(state.answers).length===questions.length;
-  document.querySelector('#quiz-view').innerHTML=`<div class="quiz-layout"><div class="quiz-intro"><div class="eyebrow">CHECK YOUR DISCOVERY</div><h2>오늘의 발견을<br>내 것으로 만들어요.</h2><p>정답보다 중요한 건, 이유를 아는 것.<br>탐험하며 알게 된 내용을 떠올려 보세요.</p><div class="quiz-illustration">🍚 <span>→</span> ✨</div><button class="text-button" data-view="explore">탐험실로 돌아가기 ${icon('arrow')}</button></div><article class="panel quiz-card"><div class="quiz-count">질문 0${state.quiz+1} <span>/ 0${questions.length}</span></div><h3>${q.text}</h3><div class="quiz-options">${q.choices.map((c,i)=>`<button data-answer="${i}" ${answer!==undefined?'disabled':''} class="${answer!==undefined&&i===q.answer?'correct':answer===i?'incorrect':''}"><span>${String.fromCharCode(65+i)}</span>${c}${answer!==undefined&&i===q.answer?icon('check'):''}</button>`).join('')}</div>${answer!==undefined?`<div class="quiz-feedback ${answer===q.answer?'right':'wrong'}"><strong>${answer===q.answer?'잘 발견했어요!':'다시 연결해 볼까요?'}</strong><p>${q.explanation}</p></div>`:''}<div class="quiz-bottom"><button id="quiz-prev" ${state.quiz===0?'disabled':''}>이전 질문</button><span>${Object.keys(state.answers).length}개 응답 완료</span>${state.quiz<2?'<button class="primary" id="quiz-next">다음 질문 →</button>':'<button class="primary" id="quiz-restart">다시 풀기 ↻</button>'}</div>${done?`<p class="quiz-result">학습 완료 · ${questions.filter((q,i)=>state.answers[i]===q.answer).length} / 3개 정답. 해설을 읽고 음식의 여행을 다시 관찰해 보세요.</p>`:''}</article></div>`;}
+function renderResults(){
+  const report=state.submitted;
+  if(!report){document.querySelector('#results-view').innerHTML=`<div class="panel results-intro"><h2>28문항에 모두 응답한 뒤 제출해 주세요</h2><p>현재 ${totalProgress(state.responses)} / 28문항에 응답했어요. 음식의 ‘완료’ 표시는 정답 여부와 관계없이 7문항 응답이 끝났다는 뜻이에요.</p><p>PDF 생성 전에는 정답과 채점 결과가 공개되지 않습니다. 소화 평가에서 답안을 작성하거나 수정해 주세요.</p><button class="primary" data-view="explore">답안 작성으로 돌아가기</button></div>`;return;}
+  document.querySelector('#results-view').innerHTML=`<section class="results-summary panel"><div><span class="eyebrow">ASSESSMENT REPORT</span><h2>${escapeHtml(report.student.name)} 학생의 채점 결과</h2><p>${escapeHtml(report.student.classroom)} · ${escapeHtml(report.student.number)}번 · 28문항 응답 완료</p></div><strong>${report.correct}<small> / 28 정답</small></strong></section><p class="results-notice">PDF는 생성 시점의 답안과 동일합니다. 파일을 기기에 저장한 뒤 선생님이 안내한 곳에 제출하세요. 주관식은 허용된 핵심 용어로 자동 채점했으며, 표현 차이는 선생님이 최종 확인할 수 있습니다.</p><div class="results-list">${report.rows.map(row=>`<article class="result-row panel"><div class="result-row-header"><strong>${row.number}. ${row.food} · ${row.stage}</strong><span class="result-mark ${row.correct?'right':'wrong'}">${row.correct?'정답 O':'오답 X'}</span></div><h3>${row.question}</h3><p><b>나의 답</b> ${escapeHtml(row.answer)}</p><p><b>정답</b> ${escapeHtml(row.expected)}</p><details><summary>해설 보기</summary><p>${row.explanation}</p></details></article>`).join('')}</div>`;
+}
 app.addEventListener('click',event=>{const b=event.target.closest('button, [data-organ]');if(!b)return;
-  if(b.dataset.food){stop();state.progress=0;state.hint=false;state.food=foods.find(f=>f.id===b.dataset.food);state.step=0;update();}
+  if(b.dataset.food && !state.busy){stop();state.foodSteps[state.food.id]=state.step;state.progress=0;state.food=foods.find(f=>f.id===b.dataset.food);state.step=state.foodSteps[state.food.id] || 0;update();}
   if(b.dataset.filter){state.filter=b.dataset.filter;update();}
   if(b.dataset.view)setView(b.dataset.view);
-  if(b.dataset.answer!==undefined && state.answers[state.quiz]===undefined){state.answers[state.quiz]=Number(b.dataset.answer);renderQuiz();}
-  if(b.id==='play'){if(state.playing){stop();update();}else if(state.step===6 && state.predictions[predictionKey()]===true)resetCurrentFood();else start();}
+  if(b.id==='play'){if(state.playing){stop();update();}else start();}
   if(b.id==='continue')start();
-  if(b.id==='hint'){state.hint=!state.hint;renderObservation();}
-  if(b.dataset.predict!==undefined)checkPrediction(Number(b.dataset.predict));
-  if(b.id==='reset')resetCurrentFood();
+  if(b.dataset.predict!==undefined)recordAnswer(Number(b.dataset.predict));
+  if(b.id==='previous')previousQuestion();
+  if(b.id==='submit-pdf')submitPdf();
+  if(b.id==='new-assessment' && !state.busy)newAssessment();
   if(b.id==='next')start();
   if(b.id==='labels'){const show=b.getAttribute('aria-pressed')!=='true';b.setAttribute('aria-pressed',String(show));b.querySelector('.toggle').classList.toggle('on',show);document.querySelector('#body-map').classList.toggle('hide-labels',!show);}
   if(b.id==='guide'){stop();update();document.querySelector('#guide-dialog').showModal();}
   if(b.classList.contains('dialog-close')||b.classList.contains('dialog-start'))document.querySelector('#guide-dialog').close();
-  if(b.id==='quiz-next'){state.quiz++;renderQuiz();}if(b.id==='quiz-prev'){state.quiz--;renderQuiz();}if(b.id==='quiz-restart'){state.quiz=0;state.answers={};renderQuiz();}
 });
-let composing=false;
-app.addEventListener('compositionstart',()=>{composing=true;});
-app.addEventListener('compositionend',()=>{composing=false;});
-app.addEventListener('input',event=>{if(event.target.id==='short-answer')state.drafts[predictionKey()]=event.target.value;});
-app.addEventListener('submit',event=>{
-  if(event.target.id!=='short-answer-form')return;
-  event.preventDefault();
-  if(composing)return;
-  const value=document.querySelector('#short-answer').value.trim();
-  if(value)checkPrediction(value);
+app.addEventListener('input',event=>{
+  if(event.target.dataset.student){state.student[event.target.dataset.student]=event.target.value;persist();}
+  if(event.target.id==='short-answer' && !state.submitted && !state.busy){
+    const value=event.target.value;
+    if(value.trim())state.responses[predictionKey()]=value;else delete state.responses[predictionKey()];
+    refreshAssessmentControls();persist();
+    document.querySelector('#answer-status').textContent=value.trim()?'응답이 저장되었습니다. 제출 전까지 수정할 수 있어요.':'아직 응답하지 않았어요.';
+    document.querySelector('#continue')?.toggleAttribute('disabled',!value.trim());
+  }
 });
+app.addEventListener('submit',event=>{event.preventDefault();});
+document.querySelectorAll('[data-student]').forEach(input=>{input.value=state.student[input.dataset.student];});
 document.querySelector('#speed').addEventListener('change',e=>{state.speed=Number(e.target.value);});
 update();
